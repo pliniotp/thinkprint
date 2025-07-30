@@ -1,13 +1,4 @@
 {
-  // Vercel configuration for the ThinkPrint microsite.
-  //
-  // Because this application is a single page app (SPA) built with
-  // React and Vite, the front‑end handles client‑side routing.  To
-  // ensure that direct navigations to nested routes (e.g.
-  // `/register?event=...` or `/gallery/<token>`) are served by
-  // `index.html` rather than a 404 page, we configure a rewrite for
-  // all unmatched paths back to the root.  This allows the SPA to
-  // interpret the URL and render the correct view.
   "rewrites": [
     { "source": "/(.*)", "destination": "/" }
   ]
