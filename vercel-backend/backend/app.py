@@ -16,6 +16,8 @@ import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional
 
+import json
+
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -87,7 +89,55 @@ class Upload:
 # In-memory stores.  Keys are object IDs and values are the dataclass
 # instances.  These are not thread-safe and will be lost on process
 # restart.  Use a database (SQLAlchemy, DynamoDB, etc.) in production.
-events: Dict[str, Event] = {}
+
+# Persist events to a JSON file on disk so they survive local restarts.  In
+# a serverless environment the filesystem may be stateless; use a real
+# database for production.
+EVENTS_FILE = os.path.join(os.path.dirname(__file__), 'events.json')
+
+def load_events_from_file() -> Dict[str, Event]:
+    if not os.path.isfile(EVENTS_FILE):
+        return {}
+    try:
+        with open(EVENTS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        loaded: Dict[str, Event] = {}
+        for event_id, e in data.items():
+            try:
+                loaded[event_id] = Event(
+                    id=event_id,
+                    name=e.get('name', ''),
+                    phrase=e.get('phrase', ''),
+                    logo_url=e.get('logo_url'),
+                    expiration_days=e.get('expiration_days', config.DEFAULT_GALLERY_EXPIRATION_DAYS),
+                    created_at=dt.datetime.fromisoformat(e['created_at']) if 'created_at' in e else dt.datetime.utcnow(),
+                    participants=e.get('participants', []),
+                    uploads=e.get('uploads', []),
+                )
+            except Exception:
+                continue
+        return loaded
+    except Exception:
+        return {}
+
+def save_events_to_file(events_dict: Dict[str, Event]) -> None:
+    try:
+        data: Dict[str, Dict] = {}
+        for event_id, e in events_dict.items():
+            data[event_id] = {
+                'name': e.name,
+                'phrase': e.phrase,
+                'logo_url': e.logo_url,
+                'expiration_days': e.expiration_days,
+                'created_at': e.created_at.isoformat(),
+                'participants': e.participants,
+                'uploads': e.uploads,
+            }
+        with open(EVENTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+events: Dict[str, Event] = load_events_from_file()
 participants: Dict[str, Participant] = {}
 uploads: Dict[str, Upload] = {}
 
@@ -289,6 +339,8 @@ def events_collection():
     event_id = uuid.uuid4().hex
     event = Event(id=event_id, name=name, phrase=phrase, logo_url=logo_url, expiration_days=expiration_days)
     events[event_id] = event
+    # Persist events to disk
+    save_events_to_file(events)
     return jsonify(asdict(event)), 201
 
 
@@ -307,6 +359,7 @@ def event_item(event_id: str):
         event.phrase = data.get('phrase', event.phrase)
         event.logo_url = data.get('logo_url', event.logo_url)
         event.expiration_days = int(data.get('expiration_days', event.expiration_days))
+        save_events_to_file(events)
         return jsonify(asdict(event))
     # DELETE
     # Remove participants and uploads associated with this event
@@ -315,6 +368,7 @@ def event_item(event_id: str):
     for uid in list(event.uploads):
         uploads.pop(uid, None)
     events.pop(event_id)
+    save_events_to_file(events)
     return jsonify({'message': 'Event deleted'})
 
 
@@ -476,6 +530,28 @@ def event_slideshow(event_id: str):
                 'uploaded_at': upload.uploaded_at.isoformat(),
             })
     return jsonify({'event_id': event_id, 'media': media})
+
+
+# Public endpoint for event details used by microsite before registration
+@app.route('/api/public/events/<event_id>', methods=['GET'])
+def public_event_details(event_id: str):
+    """Return public information about an event for the microsite.
+
+    This endpoint exposes a subset of event fields without requiring
+    authentication.  It is used by the registration and slideshow
+    front-ends to display the event name, phrase and logo before a
+    participant has registered.
+    """
+    event = events.get(event_id)
+    if not event:
+        return jsonify({'error': 'Event not found'}), 404
+    return jsonify({
+        'id': event.id,
+        'name': event.name,
+        'phrase': event.phrase,
+        'logo_url': event.logo_url,
+        'expiration_days': event.expiration_days,
+    })
 
 
 if __name__ == '__main__':
