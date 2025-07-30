@@ -1,11 +1,8 @@
 {
-  // When deploying the backend on Vercel the functions live under
-  // ``/api``.  Our Flask app expects routes like ``/api/login`` and
-  // ``/api/register``.  The rewrite below tells Vercel to route
-  // *any* request beginning with ``/api/`` to the ``api/index``
-  // function.  Without this rewrite Vercel would attempt to map
-  // ``/api/login`` to a file ``api/login.py``, which we don't have.
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" }
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index"
+    }
   ]
 }
