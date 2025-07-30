@@ -19,74 +19,196 @@ function getRegisterEvent() {
   return params.get('event');
 }
 
-// Registration component.  Handles the participant signup flow and
-// submits the data to the backend.  After successful submission a
-// confirmation message is displayed.
+// Registration component.  Handles a multi‑step signup flow: first
+// collect the phone number, then capture a selfie using the camera.
+// Event details (name, phrase and logo) are fetched via the public
+// endpoint so they can be displayed before the user registers.
 function Register({ eventId }) {
+  const [step, setStep] = useState('phone'); // 'phone', 'camera', 'done'
   const [phone, setPhone] = useState('');
-  const [selfie, setSelfie] = useState(null);
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [useFrontCamera, setUseFrontCamera] = useState(true);
+  const videoRef = React.useRef(null);
+  const streamRef = React.useRef(null);
+  const [eventInfo, setEventInfo] = useState(null);
+  const [loadingEvent, setLoadingEvent] = useState(true);
+  const [eventError, setEventError] = useState('');
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    if (!selfie) {
-      setMessage('Por favor, selecione uma selfie.');
-      return;
+  // Fetch event info on mount
+  useEffect(() => {
+    async function fetchEvent() {
+      try {
+        const res = await fetch(`${API_BASE}/public/events/${eventId}`);
+        const data = await res.json();
+        if (res.ok) {
+          setEventInfo(data);
+        } else {
+          setEventError(data.error || 'Evento não encontrado');
+        }
+      } catch (err) {
+        console.error(err);
+        setEventError('Erro de conexão ao carregar evento');
+      } finally {
+        setLoadingEvent(false);
+      }
     }
-    setSubmitting(true);
-    const formData = new FormData();
-    formData.append('event_id', eventId);
-    formData.append('phone', phone);
-    formData.append('selfie', selfie);
+    fetchEvent();
+  }, [eventId]);
+
+  // Start camera
+  async function startCamera(front) {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
     try {
-      const res = await fetch(`${API_BASE}/register`, {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage(data.message);
-      } else {
-        setMessage(data.error || 'Erro ao realizar cadastro');
+      const constraints = {
+        video: { facingMode: front ? 'user' : { exact: 'environment' } },
+        audio: false,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
       }
     } catch (err) {
-      console.error(err);
-      setMessage('Erro de conexão');
-    } finally {
-      setSubmitting(false);
+      console.error('Erro ao acessar câmera', err);
+      setMessage('Não foi possível acessar a câmera. Verifique as permissões.');
     }
   }
 
+  // Handle phone submission
+  function handlePhoneSubmit(e) {
+    e.preventDefault();
+    if (!phone) return;
+    setStep('camera');
+    startCamera(useFrontCamera);
+  }
+
+  // Toggle front/back camera
+  function handleToggleCamera() {
+    const newFront = !useFrontCamera;
+    setUseFrontCamera(newFront);
+    startCamera(newFront);
+  }
+
+  // Capture selfie and submit
+  async function handleCapture() {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(async (blob) => {
+      if (!blob) {
+        setMessage('Erro ao capturar selfie');
+        return;
+      }
+      setSubmitting(true);
+      const formData = new FormData();
+      formData.append('event_id', eventId);
+      formData.append('phone', phone);
+      const file = new File([blob], 'selfie.jpg', { type: 'image/jpeg' });
+      formData.append('selfie', file);
+      try {
+        const res = await fetch(`${API_BASE}/register`, {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+        if (res.ok) {
+          setMessage(data.message);
+        } else {
+          setMessage(data.error || 'Erro ao realizar cadastro');
+        }
+      } catch (err) {
+        console.error(err);
+        setMessage('Erro de conexão');
+      } finally {
+        setSubmitting(false);
+        setStep('done');
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
+        }
+      }
+    }, 'image/jpeg');
+  }
+
+  // Render phone step
+  if (step === 'phone') {
+    return (
+      <div style={styles.centered}>
+        {loadingEvent ? (
+          <p>Carregando evento...</p>
+        ) : eventError ? (
+          <p>{eventError}</p>
+        ) : (
+          <>
+            {eventInfo?.logo_url ? (
+              <img src={eventInfo.logo_url} alt="Logo" style={{ maxWidth: '60%', marginBottom: '1rem' }} />
+            ) : (
+              <img src="/logo_commemorative.png" alt="ThinkPrint" style={{ maxWidth: '60%', marginBottom: '1rem' }} />
+            )}
+            <h1>{eventInfo?.name || 'Cadastro'}</h1>
+            {eventInfo?.phrase && <p style={{ marginBottom: '1rem' }}>{eventInfo.phrase}</p>}
+          </>
+        )}
+        <form onSubmit={handlePhoneSubmit} style={styles.form}>
+          <label>
+            Telefone (com DDD)
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              style={styles.input}
+              required
+            />
+          </label>
+          <button type="submit" style={styles.button}>Continuar</button>
+        </form>
+      </div>
+    );
+  }
+  // Camera step
+  if (step === 'camera') {
+    return (
+      <div style={styles.centered}>
+        <h1>Selfie</h1>
+        <div style={{ position: 'relative' }}>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            style={{ width: '100%', borderRadius: '8px' }}
+          />
+          <button
+            type="button"
+            onClick={handleToggleCamera}
+            style={{ position: 'absolute', bottom: '8px', right: '8px', backgroundColor: '#fff', border: 'none', padding: '0.5rem', borderRadius: '50%', cursor: 'pointer' }}
+          >
+            🔄
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={handleCapture}
+          style={{ ...styles.button, marginTop: '1rem' }}
+          disabled={submitting}
+        >
+          {submitting ? 'Enviando...' : 'Capturar e Enviar'}
+        </button>
+        {message && <p style={{ marginTop: '1rem' }}>{message}</p>}
+      </div>
+    );
+  }
+  // Done step
   return (
     <div style={styles.centered}>
-      <h1>Cadastro</h1>
-      <form onSubmit={handleSubmit} style={styles.form}>
-        <label>
-          Telefone (com DDD)
-          <input
-            type="tel"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            style={styles.input}
-            required
-          />
-        </label>
-        <label>
-          Selfie
-          <input
-            type="file"
-            accept="image/*"
-            onChange={(e) => setSelfie(e.target.files[0])}
-            style={styles.input}
-            required
-          />
-        </label>
-        <button type="submit" style={styles.button} disabled={submitting}>
-          {submitting ? 'Enviando...' : 'Enviar'}
-        </button>
-      </form>
-      {message && <p style={{ marginTop: '1rem' }}>{message}</p>}
+      {message ? <p>{message}</p> : <p>Perfeito! Cadastro realizado. Você receberá em minutos seu vídeo ou foto por WhatsApp ou SMS.</p>}
     </div>
   );
 }
@@ -179,6 +301,11 @@ export default function App() {
   }
   return (
     <div style={styles.centered}>
+      <img
+        src="/logo_traditional.jpeg"
+        alt="ThinkPrint"
+        style={{ maxWidth: '60%', marginBottom: '1rem' }}
+      />
       <h1>ThinkPrint Galeria Facial</h1>
       <p>Por favor, abra o link que você recebeu por SMS ou WhatsApp para ver sua galeria ou realizar o cadastro.</p>
     </div>
@@ -192,9 +319,11 @@ const styles = {
     margin: '2rem auto',
     textAlign: 'center',
     padding: '1rem',
-    backgroundColor: '#fff',
-    borderRadius: '8px',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    borderRadius: '16px',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+    backdropFilter: 'blur(12px)',
+    border: '1px solid rgba(255,255,255,0.3)',
   },
   form: {
     display: 'flex',
@@ -218,8 +347,13 @@ const styles = {
   },
   galleryContainer: {
     maxWidth: '960px',
-    margin: '0 auto',
+    margin: '2rem auto',
     padding: '1rem',
+    backgroundColor: 'rgba(255,255,255,0.35)',
+    borderRadius: '16px',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+    backdropFilter: 'blur(12px)',
+    border: '1px solid rgba(255,255,255,0.3)',
   },
   galleryHeader: {
     display: 'flex',
