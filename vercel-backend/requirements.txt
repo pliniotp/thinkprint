@@ -1,0 +1,11 @@
+# Dependencies required to run the ThinkPrint backend on Vercel.  These
+# packages mirror those specified in ``backend/requirements.txt``.  If
+# you add or remove dependencies in the main backend application
+# ensure that this file is kept in sync so that the serverless
+# deployment has the correct environment.
+flask
+flask_cors
+boto3
+pillow
+qrcode
+twilio
